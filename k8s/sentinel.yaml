@@ -1,0 +1,10 @@
+apiVersion: bluglio.com/v1
+kind: SecretSentinel
+metadata:
+  name: flaskapp
+podSelector:
+  app: frontend
+secrets:
+  - database
+namespaces:
+  - default
