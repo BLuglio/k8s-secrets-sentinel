@@ -1,8 +1,10 @@
-import requests
-import os
-import json
 import logging
 import sys
+from kubernetes import client, config, watch
+
+import time
+
+from .configmap import ConfigMapHandler
 
 log = logging.getLogger(__name__)
 out_hdlr = logging.StreamHandler(sys.stdout)
@@ -11,76 +13,55 @@ out_hdlr.setLevel(logging.INFO)
 log.addHandler(out_hdlr)
 log.setLevel(logging.INFO)
 
-
-base_url = "http://127.0.0.1:8001"
-
-
-namespace = os.getenv("res_namespace", "default")
-
-# This is the function that searches for and kills Pods by searching for them by label
-
-
-def kill_pods(labels):
-    # We receive labels in the form of a list
-    for label in labels:
-        url = "{}/api/v1/namespaces/{}/pods?labelSelector={}".format(
-            base_url, namespace, label)
-        r = requests.get(url)
-        # Make the request to the endpoint to retreive the Pods
-        response = r.json()
-        # Extract the Pod name from the list
-        pods = [p['metadata']['name'] for p in response['items']]
-        # For each Pod, issue an HTTP DELETE request
-        for p in pods:
-            url = "{}/api/v1/namespaces/{}/pods/{}".format(
-                base_url, namespace, p)
-            r = requests.delete(url)
-            if r.status_code == 200:
-                log.info("{} was deleted successfully".format(p))
-            else:
-                log.error("Could not delete {}".format(p))
-
-
-# This function is used to extract the Pod labels from the configmonitor resource.
-# It takes the configmap name as the argument and uses it to search for configmonitors
-# that have the configmap name in its spec
-def getPodLabels(configmap):
-    url = "{}/apis/magalix.com/v1/namespaces/{}/configmonitors".format(
-        base_url, namespace)
-    r = requests.get(url)
-    # Issue the HTTP request to the appropriate endpoint
-    response = r.json()
-    # Extract the podSelector part from each object in the response
-    pod_labels_json = [i['spec']['podSelector']
-              for i in response['items'] if i['spec']['configmap'] == "flaskapp-config"]
-    result = [list(l.keys())[0] + "=" + l[list(l.keys())[0]]
-              for l in pod_labels_json]
-    # The result is a list of labels
-    return result
-
-# This is the main function that watches the API for changes
-
-
-def event_loop():
+def main():
     log.info("Starting the service")
-    url = '{}/api/v1/namespaces/{}/configmaps?watch=true"'.format(
-        base_url, namespace)
-    r = requests.get(url, stream=True)
-    # We issue the request to the API endpoint and keep the conenction open
-    for line in r.iter_lines():
-        obj = json.loads(line)
-        # We examine the type part of the object to see if it is MODIFIED
-        event_type = obj['type']
-        # and we extract the configmap name because we'll need it later
-        configmap_name = obj["object"]["metadata"]["name"]
-        if event_type == "MODIFIED":
-            log.info("Modification detected")
-            # If the type is MODIFIED then we extract the pod labels by 
-            # passing the configmap name as a parameter
-            labels = getPodLabels(configmap_name)
-            # Once we have the labels, we can use them to find and kill the Pods by calling the
-            # kill_pods function
-            kill_pods(labels)
+    cm_handler = ConfigMapHandler()
 
+    log.info("Init: Kubernetes client")
+    try:
+        config.load_config()
+        client_api = client.CoreV1Api()
+        w = watch.Watch()
+    except Exception as e:
+        log.error(f"FAILED. {e}")
+        sys.exit(-1)
+    log.info("Kubernetes client init completed.")
 
-event_loop()
+    cm_exists = False
+    for event in w.stream(client_api.list_config_map_for_all_namespaces, timeout_seconds=10):
+        if event['object'].metadata.name == 'sentinel-config':
+            log.info("Sentinel ConfigMap already found.")
+            cm_exists = True
+            break
+    
+    if not cm_exists:
+        log.info("Init: Sentinel ConfigMap")
+        cm_handler.create({}, client_api)
+
+    running = True
+    while running:
+
+        log.info("Starting secrets stream.")
+        for event in w.stream(client_api.list_secret_for_all_namespaces, timeout_seconds=10):
+            log.info("Event: %s %s" % (event['type'], event['object'].metadata.name))
+            # TODO: match every secret with configmap; if secret not handled, then
+            # 1. cypher its data
+            # 2. delete original secret and create a new secret with same name and hidden data
+            # 3. save secret name and namespace in configmap
+            # 4. kill pods that use the secret
+
+        log.info("Finished secrets stream.")
+
+        time.sleep(5)
+
+    # for event in w.stream(v1.list_pod_for_all_namespaces, timeout_seconds=10):
+    #     log.info("Event: %s %s %s" % (
+    #         event['type'],
+    #         event['object'].kind,
+    #         event['object'].metadata.name)
+    #     )
+
+    # log.info("Finished pod stream.")
+
+if __name__ == '__main__':
+    main()

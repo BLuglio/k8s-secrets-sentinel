@@ -1,10 +1,11 @@
 apiVersion: bluglio.com/v1
 kind: SecretSentinel
 metadata:
-  name: flaskapp
+  name: secretsentinel
 podSelector:
   app: frontend
 secrets:
   - database
 namespaces:
   - default
+  - app
