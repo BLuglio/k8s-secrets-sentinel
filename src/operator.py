@@ -4,7 +4,7 @@ from kubernetes import client, config, watch
 
 import time
 
-from .configmap import ConfigMapHandler
+from configmap import ConfigMapHandler
 
 log = logging.getLogger(__name__)
 out_hdlr = logging.StreamHandler(sys.stdout)
@@ -23,7 +23,7 @@ def main():
         client_api = client.CoreV1Api()
         w = watch.Watch()
     except Exception as e:
-        log.error(f"FAILED. {e}")
+        log.error("FAILED - " + str(e))
         sys.exit(-1)
     log.info("Kubernetes client init completed.")
 
@@ -43,7 +43,8 @@ def main():
 
         log.info("Starting secrets stream.")
         for event in w.stream(client_api.list_secret_for_all_namespaces, timeout_seconds=10):
-            log.info("Event: %s %s" % (event['type'], event['object'].metadata.name))
+            log.info("Event: %s %s in namespace %s" % (event['type'], event['object'].metadata.name, event['object'].metadata.namespace))
+            
             # TODO: match every secret with configmap; if secret not handled, then
             # 1. cypher its data
             # 2. delete original secret and create a new secret with same name and hidden data
