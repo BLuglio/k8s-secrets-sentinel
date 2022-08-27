@@ -32,14 +32,7 @@ def loop():
         sys.exit(-1)
     log.info("Kubernetes client init completed.")
 
-    cm_exists = False
-    for event in w.stream(client_api.list_config_map_for_all_namespaces, timeout_seconds=constants.TIMEOUT_SECONDS):
-        if event['object'].metadata.name == constants.CONFIGMAP_NAME:
-            log.info("Sentinel ConfigMap already found.")
-            cm_exists = True
-            break
-    
-    if not cm_exists:
+    if not cm_handler.exists(client_api, w):
         log.info("Init: Sentinel ConfigMap")
         cm_handler.create({}, client_api)
 
@@ -56,33 +49,33 @@ def loop():
                 name = key.split(".")[0]
                 namespace = key.split(".")[1]
                 log.info(f'secret {name} in namespace: {namespace} is {value}')
-                # if(current_configmap.get(name))
-                cm_handler.add_new_entry({event['object'].metadata.name + constants.CONFIGMAP_KEY_SEPARATOR + event['object'].metadata.namespace: 'ready'}, client_api)
-            # match every secret in namespace with configmap; if secret state is 'ready', then process
-                if value == 'ready':
-                    # cypher secret data
-                    secret = vars(client_api.read_namespaced_secret(name, namespace))
-                    secret_data = secret['_data']
+                if not current_configmap['_data'].get(f'{name}.{namespace}'):
+                    cm_handler.add_new_entry({event['object'].metadata.name + constants.CONFIGMAP_KEY_SEPARATOR + event['object'].metadata.namespace: 'ready'}, client_api)
+                    # match every secret in namespace with configmap; if secret state is 'ready', then process
+                    if value == 'ready':
+                        # cypher secret data
+                        secret = vars(client_api.read_namespaced_secret(name, namespace))
+                        secret_data = secret['_data']
 
-                    for k, v in secret_data.items():
-                        v_decoded_bytes = base64.b64decode(v)
-                        v_decoded = v_decoded_bytes.decode('utf-8')
-                        v_aes = aes_chypher.encrypt(v_decoded)
-                        print(f'original value: {v_decoded}')
-                        print(f'encrypted value: {v_aes}')
+                        for k, v in secret_data.items():
+                            v_decoded_bytes = base64.b64decode(v)
+                            v_decoded = v_decoded_bytes.decode('utf-8')
+                            v_aes = aes_chypher.encrypt(v_decoded)
+                            print(f'original value: {v_decoded}')
+                            print(f'encrypted value: {v_aes}')
 
-                        secret_data[k] = base64.b64encode(v_aes).decode('utf-8')
-                    
-                    # create a new secret with same name and hidden data
-                    secret_handler.create(f'{name}-enc', namespace, secret_data, client_api)
-                    log.info(f'Created secret {name}-enc in namespace {namespace}')
+                            secret_data[k] = base64.b64encode(v_aes).decode('utf-8')
+                        
+                        # create a new secret with same name and hidden data
+                        secret_handler.create(f'{name}-enc', namespace, secret_data, client_api)
+                        log.info(f'Created secret {name}-enc in namespace {namespace}')
 
-                    # delete original secret
-                    secret_handler.delete(name, namespace, client_api)
-                    
-                    # save secret status in configmap
+                        # delete original secret
+                        secret_handler.delete(name, namespace, client_api)
+                        
+                        # save secret status in configmap
 
-                    # restart pods that use the secret
+                        # restart pods that use the secret
 
         log.info("Finished secrets stream.")
 
