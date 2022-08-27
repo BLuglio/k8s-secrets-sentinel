@@ -1,7 +1,19 @@
 import kubernetes.client as k8s_client
 import kubernetes.config as k8s_config
 
-class CustomResourceHandler:
+from operator.k8s.resource import ResourceHandler
+
+class CustomResourceHandler(ResourceHandler):
+
+    def get(self, ):
+        k8s_config.load_kube_config()
+
+        with k8s_client.ApiClient() as api_client:
+            api_instance = k8s_client.ApiextensionsV1Api(api_client)
+            try:
+                secret_sentinel_crd = api_instance.read_custom_resource_definition('secretsentinel')
+            except k8s_client.rest.ApiException as e:
+                raise e
 
     def create(self):
         secret_sentinel_crd = k8s_client.V1CustomResourceDefinition(
@@ -48,3 +60,15 @@ class CustomResourceHandler:
                     print("CRD already exists")
                 else:
                     raise e
+
+    def get_all(self, namespace):
+        return super().get_all(namespace)
+    
+    def delete(self, name, namespace='default'):
+        return super().delete(name, namespace)
+
+    def exists(self, name):
+        return super().exists(name)
+    
+    def update(self, name, data=..., namespace='default'):
+        return super().update(name, data, namespace)

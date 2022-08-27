@@ -5,7 +5,7 @@ import time
 from kubernetes import client, config, watch
 
 from k8s.configmap import ConfigMapHandler
-from k8s.secret import SecretHandler
+from k8s.secret import SecretHandler, SecretStatus
 from util.cipher import AESCipher
 import constants
 
@@ -18,31 +18,21 @@ log.setLevel(logging.INFO)
 
 def loop():
     log.info("Starting the service")
-    cm_handler = ConfigMapHandler()
+    configmap_handler = ConfigMapHandler()
     secret_handler = SecretHandler()
     aes_chypher = AESCipher(constants.CHYPER_KEY)
 
-    log.info("Init: Kubernetes client")
-    try:
-        config.load_config()
-        client_api = client.CoreV1Api()
-        w = watch.Watch()
-    except Exception as e:
-        log.error("FAILED - " + str(e))
-        sys.exit(-1)
-    log.info("Kubernetes client init completed.")
-
-    if not cm_handler.exists(client_api, w):
+    if not configmap_handler.exists(constants.CONFIGMAP_NAME):
         log.info("Init: Sentinel ConfigMap")
-        cm_handler.create({}, client_api)
+        configmap_handler.create(constants.CONFIGMAP_NAME, {})
 
     running = True
     while running:
 
         log.info("Starting secrets stream.")
-        for event in w.stream(client_api.list_secret_for_all_namespaces, timeout_seconds=constants.TIMEOUT_SECONDS):
-            log.info("Event: %s %s in namespace %s" % (event['type'], event['object'].metadata.name, event['object'].metadata.namespace))
-            current_configmap = vars(client_api.read_namespaced_config_map(constants.CONFIGMAP_NAME, constants.CONFIGMAP_NAMESPACE))
+        for secret in secret_handler.get_all():
+            log.info("Event: %s %s in namespace %s" % (secret['type'], secret['object'].metadata.name, secret['object'].metadata.namespace))
+            current_configmap = configmap_handler.get(constants.CONFIGMAP_NAME, constants.CONFIGMAP_NAMESPACE)
             current_configmap_data = current_configmap['_data']
 
             for key, value in current_configmap_data.items():
@@ -50,11 +40,11 @@ def loop():
                 namespace = key.split(".")[1]
                 log.info(f'secret {name} in namespace: {namespace} is {value}')
                 if not current_configmap['_data'].get(f'{name}.{namespace}'):
-                    cm_handler.add_new_entry({event['object'].metadata.name + constants.CONFIGMAP_KEY_SEPARATOR + event['object'].metadata.namespace: 'ready'}, client_api)
+                    configmap_handler.update({secret['object'].metadata.name + constants.CONFIGMAP_KEY_SEPARATOR + secret['object'].metadata.namespace: SecretStatus.READY})
                     # match every secret in namespace with configmap; if secret state is 'ready', then process
-                    if value == 'ready':
+                    if value == SecretStatus.READY:
                         # cypher secret data
-                        secret = vars(client_api.read_namespaced_secret(name, namespace))
+                        secret = secret_handler.get(name, namespace)
                         secret_data = secret['_data']
 
                         for k, v in secret_data.items():
@@ -64,18 +54,21 @@ def loop():
                             print(f'original value: {v_decoded}')
                             print(f'encrypted value: {v_aes}')
 
+                            # TODO: assert that decrypt(v_aes)=v_decoded
+
                             secret_data[k] = base64.b64encode(v_aes).decode('utf-8')
                         
-                        # create a new secret with same name and hidden data
-                        secret_handler.create(f'{name}-enc', namespace, secret_data, client_api)
-                        log.info(f'Created secret {name}-enc in namespace {namespace}')
-
                         # delete original secret
-                        secret_handler.delete(name, namespace, client_api)
+                        secret_handler.delete(name, namespace)
+
+                        # create a new secret with same name and hidden data
+                        secret_handler.create(name, namespace, secret_data)
+                        log.info(f'Created encrypted version of secret {name} in namespace {namespace}')
                         
                         # save secret status in configmap
-
+                        
                         # restart pods that use the secret
+
 
         log.info("Finished secrets stream.")
 
