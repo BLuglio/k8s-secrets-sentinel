@@ -1,3 +1,4 @@
+CRD_NAME = 'secretsentinel'
 CONFIGMAP_NAME = 'sentinel-config'
 CONFIGMAP_NAMESPACE = 'default'
 CONFIGMAP_KEY_SEPARATOR = '.'

@@ -1,19 +1,28 @@
 import kubernetes.client as k8s_client
 import kubernetes.config as k8s_config
 
-from operator.k8s.resource import ResourceHandler
+from .resource import ResourceHandler
 
 class CustomResourceHandler(ResourceHandler):
 
-    def get(self, ):
+    def get(self, name, namespace='default'):
         k8s_config.load_kube_config()
 
         with k8s_client.ApiClient() as api_client:
             api_instance = k8s_client.ApiextensionsV1Api(api_client)
             try:
-                secret_sentinel_crd = api_instance.read_custom_resource_definition('secretsentinel')
+                ss = k8s_client.CustomObjectsApi().list_cluster_custom_object(group="bluglio.com", version="v1", plural=name)
+                return ss
             except k8s_client.rest.ApiException as e:
                 raise e
+    
+    def get_target_namespaces(self) -> list:
+        current_crd = self.get('secretsentinels')
+        return list(current_crd['items'][0]['namespaces'])
+    
+    def get_target_secrets(self) -> list:
+        current_crd = self.get('secretsentinels')
+        return list(current_crd['items'][0]['secrets'])
 
     def create(self):
         secret_sentinel_crd = k8s_client.V1CustomResourceDefinition(

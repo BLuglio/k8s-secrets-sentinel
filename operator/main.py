@@ -2,10 +2,10 @@ import base64
 import logging
 import sys
 import time
-from kubernetes import client, config, watch
 
 from k8s.configmap import ConfigMapHandler
 from k8s.secret import SecretHandler, SecretStatus
+from k8s.crd import CustomResourceHandler
 from util.cipher import AESCipher
 import constants
 
@@ -20,6 +20,7 @@ def loop():
     log.info("Starting the service")
     configmap_handler = ConfigMapHandler()
     secret_handler = SecretHandler()
+    crd_handler = CustomResourceHandler()
     aes_chypher = AESCipher(constants.CHYPER_KEY)
 
     if not configmap_handler.exists(constants.CONFIGMAP_NAME):
@@ -29,48 +30,54 @@ def loop():
     running = True
     while running:
 
-        log.info("Starting secrets stream.")
+        # 1. Update ConfigMap with new targeted secrets
         for secret in secret_handler.get_all():
             log.info("Event: %s %s in namespace %s" % (secret['type'], secret['object'].metadata.name, secret['object'].metadata.namespace))
-            current_configmap = configmap_handler.get(constants.CONFIGMAP_NAME, constants.CONFIGMAP_NAMESPACE)
-            current_configmap_data = current_configmap['_data']
+            current_secret_name = secret['object'].metadata.name
+            current_secret_namespace = secret['object'].metadata.namespace
 
-            for key, value in current_configmap_data.items():
+            target_namespaces = crd_handler.get_target_namespaces()
+            target_secrets = crd_handler.get_target_secrets()
+
+            if not configmap_handler.contains(constants.CONFIGMAP_NAME, current_secret_name, namespace=current_secret_namespace):
+                if current_secret_namespace in target_namespaces and current_secret_name in target_secrets:
+                    configmap_handler.update({current_secret_name + constants.CONFIGMAP_KEY_SEPARATOR + current_secret_namespace: SecretStatus.READY})
+            
+        # 2. Encrypt secrets with "READY" status 
+        current_configmap = configmap_handler.get(constants.CONFIGMAP_NAME, constants.CONFIGMAP_NAMESPACE)
+        current_configmap_data = current_configmap['_data']
+
+        for key, value in current_configmap_data.items():
+            if value == SecretStatus.READY:
                 name = key.split(".")[0]
                 namespace = key.split(".")[1]
-                log.info(f'secret {name} in namespace: {namespace} is {value}')
-                if not current_configmap['_data'].get(f'{name}.{namespace}'):
-                    configmap_handler.update({secret['object'].metadata.name + constants.CONFIGMAP_KEY_SEPARATOR + secret['object'].metadata.namespace: SecretStatus.READY})
-                    # match every secret in namespace with configmap; if secret state is 'ready', then process
-                    if value == SecretStatus.READY:
-                        # cypher secret data
-                        secret = secret_handler.get(name, namespace)
-                        secret_data = secret['_data']
+                log.info(f'Processing {value} secret {name} in namespace: {namespace}')
 
-                        for k, v in secret_data.items():
-                            v_decoded_bytes = base64.b64decode(v)
-                            v_decoded = v_decoded_bytes.decode('utf-8')
-                            v_aes = aes_chypher.encrypt(v_decoded)
-                            print(f'original value: {v_decoded}')
-                            print(f'encrypted value: {v_aes}')
+                # cypher secret data
+                secret = secret_handler.get(name, namespace)
+                secret_data = secret['_data']
 
-                            # TODO: assert that decrypt(v_aes)=v_decoded
+                for k, v in secret_data.items():
+                    v_decoded_bytes = base64.b64decode(v)
+                    v_decoded = v_decoded_bytes.decode('utf-8')
+                    v_aes = aes_chypher.encrypt(v_decoded)
+                    print(f'original value: {v_decoded}')
+                    print(f'encrypted value: {v_aes}')
 
-                            secret_data[k] = base64.b64encode(v_aes).decode('utf-8')
-                        
-                        # delete original secret
-                        secret_handler.delete(name, namespace)
+                    # TODO: assert that decrypt(v_aes)=v_decoded
 
-                        # create a new secret with same name and hidden data
-                        secret_handler.create(name, namespace, secret_data)
-                        log.info(f'Created encrypted version of secret {name} in namespace {namespace}')
-                        
-                        # save secret status in configmap
-                        
-                        # restart pods that use the secret
+                    secret_data[k] = base64.b64encode(v_aes).decode('utf-8')
+                
+                # delete original secret
+                secret_handler.delete(name, namespace)
 
-
-        log.info("Finished secrets stream.")
+                # create a new secret with same name and hidden data
+                secret_handler.create(name, namespace, secret_data)
+                log.info(f'Created encrypted version of secret {name} in namespace {namespace}')
+                
+                # save secret status in configmap
+                
+                # restart pods that use the secret
 
         time.sleep(5)
 

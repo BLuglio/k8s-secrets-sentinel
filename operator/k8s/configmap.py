@@ -40,10 +40,21 @@ class ConfigMapHandler(ResourceHandler):
         return resource_found
     
     def get(self, name, namespace='default'):
-        return vars(self.client_api.read_namespaced_config_map(name,))
+        return vars(self.client_api.read_namespaced_config_map(name, namespace))
     
     def get_all(self, namespace=None):
         return super().get_all(namespace)
 
     def delete(self, name, namespace='default'):
         return super().delete(name, namespace)
+
+    def contains(self, name, secret_name, namespace='default'):
+        configmap = self.get('sentinel-config')
+        return configmap['_data'].get(f'{secret_name}.{namespace}')
+        # found = False
+        # for key in data.keys():
+        #     name = key.split(".")[0]
+        #     if name == secret_name:
+        #         found = True
+        #         break
+        # return found
