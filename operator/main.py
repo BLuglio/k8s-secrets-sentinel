@@ -6,7 +6,7 @@ import time
 from k8s.configmap import ConfigMapHandler
 from k8s.secret import SecretHandler, SecretStatus
 from k8s.crd import CustomResourceHandler
-from util.cipher import AESCipher
+from cipher.aes import AESCipher
 import constants
 
 log = logging.getLogger(__name__)
